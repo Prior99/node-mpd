@@ -49,6 +49,10 @@ MPD.prototype.next = function() {
 	this._sendCommand("next", this._checkReturn.bind(this));
 };
 
+MPD.prototype.clear = function() {
+	this._sendCommand("clear", this._checkReturn.bind(this));
+};
+
 MPD.prototype.prev = function() {
 	this._sendCommand("prev", this._checkReturn.bind(this));
 };
@@ -261,31 +265,42 @@ MPD.prototype._setReady = function() {
 	this.emit('ready', this.status, this.server);
 };
 
-function hasReturn(message) {
-	return message.match(/.*?OK\s*$/) || message.match(/ACK\s*\[\d*\@\d*]\s*\{.*?\}\s*.*?\s*$/);
+function findReturn(message) {
+	var arr;
+	var rOk = /OK(?:\n|$)/g;
+	var rAck = /ACK\s*\[\d*\@\d*]\s*\{.*?\}\s*.*?(?:$|\n)/g;
+	if(arr = rOk.exec(message)) {
+		return arr.index + arr[0].length;
+	}
+	else if(arr = rAck.exec(message)) {
+		return arr.index + arr[0].length;
+	}
+	else return -1;
 }
 
 MPD.prototype._onData = function(message) {
+	if(!message) {
+		message = "";
+	}
 	message = message.trim();
 	//console.log("RECV: " + message);
-	if(this.idling) {
+	if(this.idling || this.commanding) {
 		this.buffer += message;
-		if(hasReturn(this.buffer)) {
-			var string = this.buffer;
-			this.buffer = "";
-			this._onMessage(string);
+		var index;
+		if((index = findReturn(this.buffer)) !== -1) { // We found a return mark
+			var string = this.buffer.substring(0, index).trim();
+			this.buffer = this.buffer.substring(index, this.buffer.length);
+			//console.log("PARSED: " + string);
+			//console.log("Message returned: " + string);
+			if(this.idling) {
+				this._onMessage(string);
+			}
+			else if(this.commanding) {
+				//console.log("onData response for: \"" + message + "\"");
+				this._handleResponse(string);
+			}
 		}
-		else console.log("Doesn't have return: " + this.buffer);
-	}
-	else if(this.commanding) {
-		//console.log("onData response for: \"" + message + "\"");
-		this.buffer += message;
-		if(hasReturn(this.buffer)) {
-			var string = this.buffer;
-			this.buffer = "";
-			this._handleResponse(string);
-		}
-		else console.log("Doesn't have return: " + this.buffer);
+		//else console.log("Doesn't have return: " + this.buffer);
 	}
 };
 
@@ -316,6 +331,7 @@ MPD.prototype._leaveIdle = function(callback) {
 };
 
 MPD.prototype._checkIdle = function() {
+	//console.log(this._requests.length + " pending requests");
 	if(!this._activeListener && this._requests.length == 0 && !this.idling) {
 		//console.log("No more requests, entering idle.");
 		this._enterIdle();
@@ -328,17 +344,25 @@ MPD.prototype._checkIdle = function() {
 
 MPD.prototype._checkOutgoing = function() {
 	var request;
-	if(this._activeListener) {
+	if(this._activeListener || this.busy) {
 		//console.log("No deque as active listener.");
 		return;
 	}
 	if(request = this._requests.shift()) {
 		//console.log("Pending deque, leaving idle.");
-		this._leaveIdle(function() {
+		this.busy = true;
+		var deque = function() {
 			//console.log("Dequed.");
 			this._activeListener = request.callback;
+			this.busy = false;
 			this._write(request.message);
-		}.bind(this));
+		}.bind(this);
+		if(this.idling) {
+			this._leaveIdle(deque);
+		}
+		else {
+			deque();
+		}
 	}
 };
 
@@ -367,7 +391,7 @@ MPD.prototype._send = function(message, callback) {
 		message : message,
 		callback : callback
 	});
-	//console.log("Enqueued: " + message);
+	//console.log("Enqueued: " + message, ", " + this._requests.length + " pending");
 	this._checkOutgoing();
 };
 
