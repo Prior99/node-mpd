@@ -1,6 +1,7 @@
 var Socket = require('net').Socket;
 var EventEmitter = require("events").EventEmitter;
 var Util = require("util");
+var Song = require("./song");
 
 if(!String.prototype.trim) {
 	(function() {
@@ -12,12 +13,21 @@ if(!String.prototype.trim) {
 	})();
 }
 
+if(!String.prototype.startsWith) {
+	String.prototype.startsWith = function(searchString, position) {
+		position = position || 0;
+		return this.lastIndexOf(searchString, position) === position;
+	};
+}
+
 var MPD = function(obj) {
 	this.port = obj.port ? obj.port : 6600;
 	this.host = obj.host ? obj.host : "localhost";
 	this._requests = [];
 	this.status = {};
 	this.server = {};
+	this.playlist = [];
+	this.songs = [];
 };
 
 Util.inherits(MPD, EventEmitter);
@@ -46,11 +56,88 @@ MPD.prototype.toggle = function() {
 	this._sendCommand("toggle", this._checkReturn.bind(this));
 };
 
-MPD.prototype.update = function() {
+MPD.prototype.updateSongs = function() {
 	this._sendCommand("update", this._checkReturn.bind(this));
 };
 
-MPD.prototype.updateStatus = function(callback) {
+MPD.prototype.add = function(name, callback) {
+	this._sendCommand("add", name, function(r) {
+		this._checkReturn(r);
+		callback();
+	}.bind(this));
+};
+
+/*
+ * Connect and disconnect
+ */
+
+MPD.prototype.connect = function() {
+	this.client = new Socket();
+	this.client.setEncoding('utf8');
+	this._activeListener = this._initialGreeting.bind(this);
+	this.client.connect(this.port, this.host, function() {
+		this.client.on('data', this._onData.bind(this));
+	}.bind(this));
+};
+
+MPD.prototype.disconnect = function() {
+	this.client.destroy();
+};
+
+/*
+ * Not-so-toplevel methods
+ */
+
+MPD.prototype._updatePlaylist = function(callback) {
+	this._sendCommand("playlistinfo", function(message) {
+		var lines = message.split("\n");
+		this.playlist = [];
+		var songLines = [];
+		var pos;
+		for(var i = 0; i < lines.length - 1; i++) {
+			var line = lines[i];
+			if(i !== 0 && line.startsWith("file:")) {
+				this.playlist[pos] = Song.createFromInfoArray(songLines, this);
+				songLines = [];
+			}
+			if(line.startsWith("Pos")) {
+				pos = parseInt(line.split(":")[1].trim());
+			}
+			else {
+				songLines.push(line);
+			}
+		}
+		this.playlist[pos] = Song.createFromInfoArray(songLines, this);
+		this._checkReturn(lines[lines.length - 1]);
+		if(callback) {
+			callback(this.playlist);
+		}
+	}.bind(this));
+};
+
+MPD.prototype._updateSongs = function(callback) {
+	this._sendCommand("listallinfo", function(message) {
+		var lines = message.split("\n");
+
+		this.songs = [];
+		var songLines = [];
+		for(var i = 0; i < lines.length - 1; i++) {
+			var line = lines[i];
+			if(i !== 0 && line.startsWith("file:")) {
+				this.songs.push(Song.createFromInfoArray(songLines, this));
+				songLines = [];
+			}
+			songLines.push(line);
+		}
+		this.songs.push(Song.createFromInfoArray(songLines, this));
+		this._checkReturn(lines[lines.length - 1]);
+		if(callback) {
+			callback(this.songs);
+		}
+	}.bind(this));
+};
+
+MPD.prototype._updateStatus = function(callback) {
 	this._sendCommand("status", function(message) {
 		var array = message.split("\n");
 		for(var i in array) {
@@ -63,7 +150,7 @@ MPD.prototype.updateStatus = function(callback) {
 					continue;
 				}
 			}
-			var key = keyValue[0];
+			var key = keyValue[0].trim();
 			var value = keyValue[1].trim();
 			switch(key) {
 				case "volume":
@@ -104,43 +191,33 @@ MPD.prototype.updateStatus = function(callback) {
 	}.bind(this));
 };
 
-MPD.prototype.listall = function(callback) {
-	this._sendCommand("listall", function(message) {
-		message = message.replace("file: ", "");
-		var songs = message.split("\n");
-		this.songs = [];
-		for(var i = 0; i < songs.length - 1; i++) {
-			this.songs.push(songs[i]);
-		}
-		console.log("callback:", callback);
-		if(callback) {
-			callback(this.songs);
-		}
-	}.bind(this));
-};
-
-MPD.prototype.add = function(name, callback) {
-	this._sendCommand("add", name, function(r) {
-		this._checkReturn(r);
-		callback();
-	}.bind(this));
-};
-
 /*
- * Connect and disconnect
+ * Idle handling
  */
 
-MPD.prototype.connect = function() {
-	this.client = new Socket();
-	this.client.setEncoding('utf8');
-	this._activeListener = this._initialGreeting.bind(this);
-	this.client.connect(this.port, this.host, function() {
-		this.client.on('data', this._onData.bind(this));
-	}.bind(this));
-};
-
-MPD.prototype.disconnect = function() {
-	this.client.destroy();
+MPD.prototype._onMessage = function(message) {
+	var match;
+	if(!(match = message.match(/changed:\s*(.*?)\s+OK/))) {
+		throw new Error("Received unknown message during idle: " + message);
+	}
+	this._enterIdle();
+	var updated = match[1];
+	var afterUpdate = function() {
+		this.emit("update", updated);
+	}.bind(this);
+	switch(updated) {
+		case "mixer":
+		case "player":
+		case "options":
+			this._updateStatus(afterUpdate);
+			break;
+		case "playlist":
+			this._updatePlaylist(afterUpdate);
+			break;
+		case "database":
+			this._updateSongs(afterUpdate);
+			break;
+	};
 };
 
 /*
@@ -157,23 +234,21 @@ MPD.prototype._initialGreeting = function(message) {
 		throw new Error("Unknown values while receiving initial greeting");
 	}
 	//this._enterIdle();
-	this.updateStatus(this._initialStatus.bind(this));
+	var refreshPlaylist = function() {
+		this._updatePlaylist(this._setReady.bind(this));
+	}.bind(this);
+	var refreshDatabase = function() {
+		this._updateSongs(refreshPlaylist);
+	}.bind(this);
+	var refreshStatus = function() {
+		this._updateStatus(refreshDatabase);
+	}.bind(this);
+	refreshStatus();
 };
 
-MPD.prototype._initialStatus = function() {
+MPD.prototype._setReady = function() {
 	this.emit('ready', this.status, this.server);
 };
-
-MPD.prototype._onMessage = function(message) {
-	if(!message.match(/changed:\s*(.*?)\s+OK/)) {
-		throw new Error("Received unknown message during idle: " + message);
-	}
-	this._enterIdle();
-	this.updateStatus(function(status) {
-		this.emit('update', status);
-	}.bind(this));
-};
-
 
 MPD.prototype._onData = function(message) {
 	message = message.trim();
