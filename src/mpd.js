@@ -28,6 +28,7 @@ var MPD = function(obj) {
 	this.server = {};
 	this.playlist = [];
 	this.songs = [];
+	this.buffer = "";
 };
 
 Util.inherits(MPD, EventEmitter);
@@ -63,7 +64,9 @@ MPD.prototype.updateSongs = function() {
 MPD.prototype.add = function(name, callback) {
 	this._sendCommand("add", name, function(r) {
 		this._checkReturn(r);
-		callback();
+		if(callback) {
+			callback();
+		}
 	}.bind(this));
 };
 
@@ -74,9 +77,9 @@ MPD.prototype.add = function(name, callback) {
 MPD.prototype.connect = function() {
 	this.client = new Socket();
 	this.client.setEncoding('utf8');
-	this._activeListener = this._initialGreeting.bind(this);
+	this.commanding = true;
 	this.client.connect(this.port, this.host, function() {
-		this.client.on('data', this._onData.bind(this));
+		this.client.once('data', this._initialGreeting.bind(this))
 	}.bind(this));
 };
 
@@ -99,6 +102,7 @@ MPD.prototype._updatePlaylist = function(callback) {
 			if(i !== 0 && line.startsWith("file:")) {
 				this.playlist[pos] = Song.createFromInfoArray(songLines, this);
 				songLines = [];
+				pos = -1;
 			}
 			if(line.startsWith("Pos")) {
 				pos = parseInt(line.split(":")[1].trim());
@@ -107,7 +111,9 @@ MPD.prototype._updatePlaylist = function(callback) {
 				songLines.push(line);
 			}
 		}
-		this.playlist[pos] = Song.createFromInfoArray(songLines, this);
+		if(songLines.length !== 0 && pos !== -1) {
+			this.playlist[pos] = Song.createFromInfoArray(songLines, this);
+		}
 		this._checkReturn(lines[lines.length - 1]);
 		if(callback) {
 			callback(this.playlist);
@@ -129,7 +135,9 @@ MPD.prototype._updateSongs = function(callback) {
 			}
 			songLines.push(line);
 		}
-		this.songs.push(Song.createFromInfoArray(songLines, this));
+		if(songLines.length !== 0) {
+			this.songs.push(Song.createFromInfoArray(songLines, this));
+		}
 		this._checkReturn(lines[lines.length - 1]);
 		if(callback) {
 			callback(this.songs);
@@ -225,6 +233,7 @@ MPD.prototype._onMessage = function(message) {
  */
 
 MPD.prototype._initialGreeting = function(message) {
+	//console.log("Got initial greeting: " + message);
 	var m;
 	if(m = message.match(/OK\s(.*?)\s((:?[0-9]|\.))/)) {
 		this.server.name = m[1];
@@ -233,6 +242,8 @@ MPD.prototype._initialGreeting = function(message) {
 	else {
 		throw new Error("Unknown values while receiving initial greeting");
 	}
+	this._enterIdle();
+	this.client.on('data', this._onData.bind(this));
 	//this._enterIdle();
 	var refreshPlaylist = function() {
 		this._updatePlaylist(this._setReady.bind(this));
@@ -250,15 +261,31 @@ MPD.prototype._setReady = function() {
 	this.emit('ready', this.status, this.server);
 };
 
+function hasReturn(message) {
+	return message.match(/.*?OK\s*$/) || message.match(/ACK\s*\[\d*\@\d*]\s*\{.*?\}\s*.*?\s*$/);
+}
+
 MPD.prototype._onData = function(message) {
 	message = message.trim();
 	//console.log("RECV: " + message);
 	if(this.idling) {
-		this._onMessage(message);
+		this.buffer += message;
+		if(hasReturn(this.buffer)) {
+			var string = this.buffer;
+			this.buffer = "";
+			this._onMessage(string);
+		}
+		else console.log("Doesn't have return: " + this.buffer);
 	}
-	else {
+	else if(this.commanding) {
 		//console.log("onData response for: \"" + message + "\"");
-		this._handleResponse(message);
+		this.buffer += message;
+		if(hasReturn(this.buffer)) {
+			var string = this.buffer;
+			this.buffer = "";
+			this._handleResponse(string);
+		}
+		else console.log("Doesn't have return: " + this.buffer);
 	}
 };
 
@@ -274,13 +301,15 @@ MPD.prototype._checkReturn = function(msg) {
 
 MPD.prototype._enterIdle = function(callback) {
 	this.idling = true;
+	this.commanding = false;
 	this._write("idle");
 };
 
 MPD.prototype._leaveIdle = function(callback) {
 	this.idling = false;
 	this.client.once("data", function(message) {
-		this._checkReturn(message.trim());
+		//this._checkReturn(message.trim());
+		this.commanding = true;
 		callback();
 	}.bind(this));
 	this._write("noidle");
@@ -325,7 +354,7 @@ MPD.prototype._sendCommand = function() {
 		callback = arguments[arguments.length - 1];
 	}
 	for(var i = 1; i < arguments.length -1; i++) {
-		args += "\"" + arguments[i] + "\" ";
+		args += " \"" + arguments[i] + "\" ";
 	}
 	if(!callback) {
 		callback = function() { };

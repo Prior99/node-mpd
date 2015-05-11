@@ -5,8 +5,8 @@ var Song = function(info, mpd) {
 	}
 };
 
-Song.prototype.add = function() {
-	mpd.add(this.file);
+Song.prototype.add = function(callback) {
+	this.mpd.add(this.file, callback);
 };
 
 Song.createFromInfoArray = function(lines, mpd) {
