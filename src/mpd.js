@@ -15,12 +15,16 @@ if(!String.prototype.trim) {
 var MPD = function(obj) {
 	this.port = obj.port ? obj.port : 6600;
 	this.host = obj.host ? obj.host : "localhost";
-	this._listeners = [];
+	this._requests = [];
 	this.status = {};
 	this.server = {};
 };
 
 Util.inherits(MPD, EventEmitter);
+
+/*
+ * Top Level Methods
+ */
 
 MPD.prototype.play = function() {
 	this._sendCommand("play", this._checkReturn.bind(this));
@@ -101,13 +105,14 @@ MPD.prototype.updateStatus = function(callback) {
 };
 
 MPD.prototype.listall = function(callback) {
-	this._send("listall", function(message) {
+	this._sendCommand("listall", function(message) {
 		message = message.replace("file: ", "");
 		var songs = message.split("\n");
 		this.songs = [];
-		for(var i = 0; i < songs.length - 2; i++) {
+		for(var i = 0; i < songs.length - 1; i++) {
 			this.songs.push(songs[i]);
 		}
+		console.log("callback:", callback);
 		if(callback) {
 			callback(this.songs);
 		}
@@ -115,17 +120,32 @@ MPD.prototype.listall = function(callback) {
 };
 
 MPD.prototype.add = function(name, callback) {
-	this._send("add", name, this._checkReturn.bind(this));
+	this._sendCommand("add", name, function(r) {
+		this._checkReturn(r);
+		callback();
+	}.bind(this));
 };
+
+/*
+ * Connect and disconnect
+ */
 
 MPD.prototype.connect = function() {
 	this.client = new Socket();
 	this.client.setEncoding('utf8');
-	this._response([this._initialGreeting.bind(this)]);
+	this._activeListener = this._initialGreeting.bind(this);
 	this.client.connect(this.port, this.host, function() {
 		this.client.on('data', this._onData.bind(this));
 	}.bind(this));
 };
+
+MPD.prototype.disconnect = function() {
+	this.client.destroy();
+};
+
+/*
+ * Message handling
+ */
 
 MPD.prototype._initialGreeting = function(message) {
 	var m;
@@ -136,58 +156,17 @@ MPD.prototype._initialGreeting = function(message) {
 	else {
 		throw new Error("Unknown values while receiving initial greeting");
 	}
-	this._enterIdle();
+	//this._enterIdle();
 	this.updateStatus(this._initialStatus.bind(this));
 };
 
 MPD.prototype._initialStatus = function() {
-		this.emit('ready', this.status, this.server);
-};
-
-MPD.prototype.disconnect = function() {
-	this.client.destroy();
-};
-
-MPD.prototype._sendCommand = function() {
-	var args = Array.prototype.slice.call(arguments);
-	args.unshift(function() {
-		this._enterIdle();
-	}.bind(this));
-	this._leaveIdle(function(r) {
-		this._checkReturn(r);
-		this._send.apply(this, args);
-	}.bind(this));
-};
-
-MPD.prototype._enterIdle = function(callback) {
-	this.client.write("idle\n");
-};
-
-MPD.prototype._leaveIdle = function(callback) {
-	this._send("noidle", callback);
-};
-
-MPD.prototype._send = function() {
-	var callbacks = [];
-	var string = "";
-	for(var i in arguments) {
-		var arg = arguments[i];
-		if(typeof arg === "function"){
-			callbacks.push(arg);
-		}
-		else {
-			string += arg + " ";
-		}
-	}
-	string = string.substring(0, string.length - 1);
-	//console.log("SEND: " + string);
-	this._response(callbacks);
-	this.client.write(string + "\n");
+	this.emit('ready', this.status, this.server);
 };
 
 MPD.prototype._onMessage = function(message) {
 	if(!message.match(/changed:\s*(.*?)\s+OK/)) {
-		throw new Error("Received unknown message during idle.");
+		throw new Error("Received unknown message during idle: " + message);
 	}
 	this._enterIdle();
 	this.updateStatus(function(status) {
@@ -195,28 +174,113 @@ MPD.prototype._onMessage = function(message) {
 	}.bind(this));
 };
 
-MPD.prototype._response = function(callbacks) {
-	this._listeners.push(callbacks);
-};
 
 MPD.prototype._onData = function(message) {
 	message = message.trim();
 	//console.log("RECV: " + message);
-	if(this._listeners.length > 0) {
-		var callbacks = this._listeners.shift();
-		for(var i in callbacks) {
-			callbacks[i](message);
-		}
+	if(this.idling) {
+		this._onMessage(message);
 	}
 	else {
-		this._onMessage(message);
+		//console.log("onData response for: \"" + message + "\"");
+		this._handleResponse(message);
 	}
 };
 
 MPD.prototype._checkReturn = function(msg) {
 	if(msg !== "OK") {
-		throw new Error("Non okay return status:" + msg);
+		throw new Error("Non okay return status: \"" + msg + "\"");
 	}
 };
 
+/*
+ * Idling
+ */
+
+MPD.prototype._enterIdle = function(callback) {
+	this.idling = true;
+	this._write("idle");
+};
+
+MPD.prototype._leaveIdle = function(callback) {
+	this.idling = false;
+	this.client.once("data", function(message) {
+		this._checkReturn(message.trim());
+		callback();
+	}.bind(this));
+	this._write("noidle");
+};
+
+MPD.prototype._checkIdle = function() {
+	if(!this._activeListener && this._requests.length == 0 && !this.idling) {
+		//console.log("No more requests, entering idle.");
+		this._enterIdle();
+	}
+};
+
+/*
+ * Sending messages
+ */
+
+MPD.prototype._checkOutgoing = function() {
+	var request;
+	if(this._activeListener) {
+		//console.log("No deque as active listener.");
+		return;
+	}
+	if(request = this._requests.shift()) {
+		//console.log("Pending deque, leaving idle.");
+		this._leaveIdle(function() {
+			//console.log("Dequed.");
+			this._activeListener = request.callback;
+			this._write(request.message);
+		}.bind(this));
+	}
+};
+
+MPD.prototype._sendCommand = function() {
+	var cmd = "", args = "", callback;
+	if(arguments.length == 0) {
+		return;
+	}
+	if(arguments.length >= 1) {
+		cmd = arguments[0];
+	}
+	if(arguments.length >= 2) {
+		callback = arguments[arguments.length - 1];
+	}
+	for(var i = 1; i < arguments.length -1; i++) {
+		args += "\"" + arguments[i] + "\" ";
+	}
+	if(!callback) {
+		callback = function() { };
+	}
+	this._send(cmd + args, callback);
+};
+
+MPD.prototype._send = function(message, callback) {
+	this._requests.push({
+		message : message,
+		callback : callback
+	});
+	//console.log("Enqueued: " + message);
+	this._checkOutgoing();
+};
+
+MPD.prototype._handleResponse = function(message) {
+	var callback;
+	//console.log("Handling response: \"" + message + "\" active listener is " + this._activeListener);
+	if(callback = this._activeListener) {
+		this._activeListener = null;
+		this._checkOutgoing();
+		//console.log("Checking idle as message was sucessfully answered.");
+		this._checkIdle();
+		callback(message);
+	}
+};
+
+MPD.prototype._write = function(text) {
+	//console.log("SEND: " + text);
+	this.client.write(text + "\n");
+};
 module.exports = MPD;
