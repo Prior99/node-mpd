@@ -149,7 +149,7 @@ MPD.prototype._updateSongs = function(callback) {
 	}.bind(this));
 };
 
-MPD.prototype._updateStatus = function(callback) {
+MPD.prototype.updateStatus = function(callback) {
 	this._sendCommand("status", function(message) {
 		var array = message.split("\n");
 		for(var i in array) {
@@ -221,7 +221,7 @@ MPD.prototype._onMessage = function(message) {
 		case "mixer":
 		case "player":
 		case "options":
-			this._updateStatus(afterUpdate);
+			this.updateStatus(afterUpdate);
 			break;
 		case "playlist":
 			this._updatePlaylist(afterUpdate);
@@ -256,7 +256,7 @@ MPD.prototype._initialGreeting = function(message) {
 		this._updateSongs(refreshPlaylist);
 	}.bind(this);
 	var refreshStatus = function() {
-		this._updateStatus(refreshDatabase);
+		this.updateStatus(refreshDatabase);
 	}.bind(this);
 	refreshStatus();
 };
