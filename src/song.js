@@ -5,6 +5,16 @@ var Song = function(info, mpd) {
 	}
 };
 
+Song.prototype.flatCopy = function() {
+	var obj = {};
+	for(var key in this) {
+		if(key !== "mpd"  && this.__proto__[key] === undefined) {
+			obj[key] = this[key];
+		}
+	}
+	return obj;
+};
+
 Song.prototype.add = function(callback) {
 	this.mpd.add(this.file, callback);
 };
