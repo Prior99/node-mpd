@@ -85,6 +85,18 @@ MPD.prototype.add = function(name, callback) {
 	}.bind(this));
 };
 
+MPD.prototype.searchAdd = function(search, callback) {
+	var args = ["searchadd"];;
+	for(var key in search) {
+		args.push(key);
+		args.push(search[key]);
+	}
+	args.push(function(r) {
+		this._answerCallbackError(r, callback);
+	}.bind(this));
+	this._sendCommand.apply(this, args);
+}
+
 MPD.prototype._answerCallbackError = function(r, cb) {
 	var err = this._checkReturn(r);
 	if(cb) {
@@ -93,7 +105,7 @@ MPD.prototype._answerCallbackError = function(r, cb) {
 	else {
 		throw err;
 	}
-}
+};
 
 /*
  * Connect and disconnect
@@ -431,7 +443,7 @@ MPD.prototype._handleResponse = function(message) {
 };
 
 MPD.prototype._write = function(text) {
-	//console.log("SEND: " + text);
+	console.log("SEND: " + text);
 	this.client.write(text + "\n");
 };
 module.exports = MPD;
