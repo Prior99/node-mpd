@@ -37,41 +37,74 @@ Util.inherits(MPD, EventEmitter);
  * Top Level Methods
  */
 
-MPD.prototype.play = function() {
-	this._sendCommand("play", this._checkReturn.bind(this));
+MPD.prototype.play = function(callback) {
+	this._sendCommand("play", function(r) {
+		this._answerCallbackError(r, callback);
+	}.bind(this));
 };
 
-MPD.prototype.pause = function() {
-	this._sendCommand("pause", this._checkReturn.bind(this));
+MPD.prototype.pause = function(callback) {
+	this._sendCommand("pause", function(r) {
+		this._answerCallbackError(r, callback);
+	}.bind(this));
 };
 
-MPD.prototype.next = function() {
-	this._sendCommand("next", this._checkReturn.bind(this));
+MPD.prototype.next = function(callback) {
+	this._sendCommand("next", function(r) {
+		this._answerCallbackError(r, callback);
+	}.bind(this));
 };
 
-MPD.prototype.clear = function() {
-	this._sendCommand("clear", this._checkReturn.bind(this));
+MPD.prototype.clear = function(callback) {
+	this._sendCommand("clear", function(r) {
+		this._answerCallbackError(r, callback);
+	}.bind(this));
 };
 
-MPD.prototype.prev = function() {
-	this._sendCommand("prev", this._checkReturn.bind(this));
+MPD.prototype.prev = function(callback) {
+	this._sendCommand("prev", function(r) {
+		this._answerCallbackError(r, callback);
+	}.bind(this));
 };
 
-MPD.prototype.toggle = function() {
-	this._sendCommand("toggle", this._checkReturn.bind(this));
+MPD.prototype.toggle = function(callback) {
+	this._sendCommand("toggle", function(r) {
+		this._answerCallbackError(r, callback);
+	}.bind(this));
 };
 
-MPD.prototype.updateSongs = function() {
-	this._sendCommand("update", this._checkReturn.bind(this));
+MPD.prototype.updateSongs = function(callback) {
+	this._sendCommand("update", function(r) {
+		this._answerCallbackError(r, callback);
+	}.bind(this));
 };
 
 MPD.prototype.add = function(name, callback) {
 	this._sendCommand("add", name, function(r) {
-		this._checkReturn(r);
-		if(callback) {
-			callback();
-		}
+		this._answerCallbackError(r, callback);
 	}.bind(this));
+};
+
+MPD.prototype.searchAdd = function(search, callback) {
+	var args = ["searchadd"];;
+	for(var key in search) {
+		args.push(key);
+		args.push(search[key]);
+	}
+	args.push(function(r) {
+		this._answerCallbackError(r, callback);
+	}.bind(this));
+	this._sendCommand.apply(this, args);
+}
+
+MPD.prototype._answerCallbackError = function(r, cb) {
+	var err = this._checkReturn(r);
+	if(cb) {
+		cb(err);
+	}
+	else {
+		throw err;
+	}
 };
 
 /*
@@ -118,7 +151,8 @@ MPD.prototype._updatePlaylist = function(callback) {
 		if(songLines.length !== 0 && pos !== -1) {
 			this.playlist[pos] = Song.createFromInfoArray(songLines, this);
 		}
-		this._checkReturn(lines[lines.length - 1]);
+		var err = this._checkReturn(lines[lines.length - 1]);
+		if(err) { throw err; }
 		if(callback) {
 			callback(this.playlist);
 		}
@@ -142,7 +176,8 @@ MPD.prototype._updateSongs = function(callback) {
 		if(songLines.length !== 0) {
 			this.songs.push(Song.createFromInfoArray(songLines, this));
 		}
-		this._checkReturn(lines[lines.length - 1]);
+		var err = this._checkReturn(lines[lines.length - 1]);
+		if(err) { throw err; }
 		if(callback) {
 			callback(this.songs);
 		}
@@ -306,7 +341,7 @@ MPD.prototype._onData = function(message) {
 
 MPD.prototype._checkReturn = function(msg) {
 	if(msg !== "OK") {
-		throw new Error("Non okay return status: \"" + msg + "\"");
+		return new Error("Non okay return status: \"" + msg + "\"");
 	}
 };
 
@@ -408,7 +443,7 @@ MPD.prototype._handleResponse = function(message) {
 };
 
 MPD.prototype._write = function(text) {
-	//console.log("SEND: " + text);
+	console.log("SEND: " + text);
 	this.client.write(text + "\n");
 };
 module.exports = MPD;
