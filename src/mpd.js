@@ -443,7 +443,7 @@ MPD.prototype._handleResponse = function(message) {
 };
 
 MPD.prototype._write = function(text) {
-	console.log("SEND: " + text);
+	//console.log("SEND: " + text);
 	this.client.write(text + "\n");
 };
 module.exports = MPD;
