@@ -75,7 +75,8 @@ MPD.prototype.toggle = function(callback) {
 
 MPD.prototype.updateSongs = function(callback) {
 	this._sendCommand("update", function(r) {
-		var arr = r.split(/\s+/);
+		var arr = r.split(/\n/);
+		console.log(arr);
 		this._answerCallbackError(arr[1], callback);
 	}.bind(this));
 };
@@ -104,7 +105,9 @@ MPD.prototype._answerCallbackError = function(r, cb) {
 		cb(err);
 	}
 	else {
-		throw err;
+		if(err) {
+			throw err;
+		}
 	}
 };
 
