@@ -86,6 +86,12 @@ MPD.prototype.add = function(name, callback) {
 	}.bind(this));
 };
 
+MPD.prototype.volume = function(vol, callback) {
+	this._sendCommand("setvol", vol, function(r) {
+		this._answerCallbackError(r, callback);
+	}.bind(this));
+};
+
 MPD.prototype.searchAdd = function(search, callback) {
 	var args = ["searchadd"];;
 	for(var key in search) {
@@ -446,7 +452,7 @@ MPD.prototype._handleResponse = function(message) {
 };
 
 MPD.prototype._write = function(text) {
-	//console.log("SEND: " + text);
+	console.log("SEND: " + text);
 	this.client.write(text + "\n");
 };
 module.exports = MPD;
