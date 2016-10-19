@@ -1,14 +1,11 @@
 {
   "name": "node-mpd",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A mpd interface for node.",
   "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
   "repository": {
     "type": "git",
-    "url": "https://git.cronosx.de/prior/node-mpd.git"
+    "url": "https://github.com/Prior99/node-mpd"
   },
   "keywords": [
     "mpd"
